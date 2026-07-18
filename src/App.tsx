@@ -75,7 +75,9 @@ import {
   User as UserIcon,
   LogOut,
   Info,
-  Camera
+  Camera,
+  Cloud,
+  Star
 } from "lucide-react";
 import {
   ProjectType,
@@ -99,6 +101,9 @@ import {
   t,
   generateId
 } from "./utils";
+import { exportProjectPDF } from "./lib/exportPdf";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import AIArchitectReview from "./components/AIArchitectReview";
 
 export default function App() {
   // Global Settings State
@@ -194,8 +199,66 @@ export default function App() {
   // Regional rate customization values (INR / USD multipliers)
   const [regionalMultiplier, setRegionalMultiplier] = useState<number>(1.0);
 
+  // Cloud Saving & Sync States
+  const [isSavingToCloud, setIsSavingToCloud] = useState<boolean>(false);
+
+  // Sketch Overlay State
+  const [sketchMode, setSketchMode] = useState<boolean>(false);
+  const [sketchColor, setSketchColor] = useState<string>("#ef4444");
+  const [sketchSize, setSketchSize] = useState<number>(3);
+  const [sketchTool, setSketchTool] = useState<"pencil" | "rect" | "circle" | "line">("pencil");
+  const [isDrawingSketch, setIsDrawingSketch] = useState<boolean>(false);
+  const [sketchStartPos, setSketchStartPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [sketchHistory, setSketchHistory] = useState<ImageData | null>(null);
+
+  // 2D Drag-and-Drop State
+  const [draggingElementId, setDraggingElementId] = useState<string | null>(null);
+  const [dragStartOffset, setDragStartOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Element Canvas Refs
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const sketchCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   // Active Project Reference
   const activeProject = projects.find(p => p.id === activeProjectId) || projects[0];
+
+  // Fetch Saved Projects from Firestore when user logs in
+  useEffect(() => {
+    if (!user) return;
+    const loadCloudProjects = async () => {
+      try {
+        const q = query(collection(db, "projects"), where("userId", "==", user.uid));
+        const querySnapshot = await getDocs(q);
+        if (!querySnapshot.empty) {
+          const cloudProjects: Project[] = [];
+          querySnapshot.forEach((docSnap) => {
+            cloudProjects.push(docSnap.data() as Project);
+          });
+          
+          setProjects(prev => {
+            const combined = [...prev];
+            cloudProjects.forEach(cp => {
+              const idx = combined.findIndex(p => p.id === cp.id);
+              if (idx > -1) {
+                combined[idx] = cp;
+              } else {
+                combined.push(cp);
+              }
+            });
+            return combined;
+          });
+
+          // Set active project to first cloud project if available
+          if (cloudProjects.length > 0) {
+            setActiveProjectId(cloudProjects[0].id);
+          }
+        }
+      } catch (err) {
+        console.error("Firestore Loading Warning:", err);
+      }
+    };
+    loadCloudProjects();
+  }, [user]);
 
   // Sync initial history state
   useEffect(() => {
@@ -365,6 +428,19 @@ export default function App() {
     setSelectedElementId(null);
   };
 
+  // Bind Keyboard Shortcuts Hook
+  useKeyboardShortcuts({
+    onDelete: () => {
+      if (selectedElementId) {
+        handleDeleteSelected();
+      }
+    },
+    onUndo: handleUndo,
+    onRedo: handleRedo,
+    onEscape: () => setSelectedElementId(null),
+    hasSelected: !!selectedElementId,
+  });
+
   // Handle Drag / Move items in 2D View
   const handleMoveItem = (id: string, axis: "x" | "y", amount: number) => {
     const isRoom = activeProject.rooms.some(r => r.id === id);
@@ -396,6 +472,277 @@ export default function App() {
         return el;
       });
       updateActiveProject({ elements: updatedElements });
+    }
+  };
+
+  // Save active project state to cloud (Firestore)
+  const handleSaveToCloud = async () => {
+    if (!user) {
+      setAuthModalOpen(true);
+      setAuthError("Please Sign In to save your design projects securely to the Cloud.");
+      return;
+    }
+
+    setIsSavingToCloud(true);
+    try {
+      // Save to projects collection
+      const docRef = doc(db, "projects", activeProject.id);
+      await setDoc(docRef, {
+        ...activeProject,
+        userId: user.uid,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Show success feedback in Chat
+      const successMsg: ChatMessage = {
+        id: `cloud-save-${Date.now()}`,
+        sender: "system",
+        textEn: `Cloud Sync Successful! Project "${activeProject.name}" has been persisted securely to Firestore linked to your profile.`,
+        textHi: `क्लाउड सिंक सफल! प्रोजेक्ट "${activeProject.name}" आपके प्रोफ़ाइल से जुड़े फ़ायरस्टोर में सुरक्षित रूप से सहेजा गया है।`,
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      setChatMessages((prev) => [...prev, successMsg]);
+
+      // Visual feedback via native modal window alerting the user
+      alert(`Cloud Sync Successful!\nProject: ${activeProject.name}\nStatus: Persisted to Firestore`);
+    } catch (err: any) {
+      console.error("Cloud saving error:", err);
+      alert(`Sync Failed: ${err?.message || "Please check your network connection."}`);
+    } finally {
+      setIsSavingToCloud(false);
+    }
+  };
+
+  // Export current project BOQ, compliance, and metrics to formatted PDF
+  const handleExportPDF = () => {
+    try {
+      exportProjectPDF(activeProject, lang, regionalMultiplier);
+      
+      const pdfMsg: ChatMessage = {
+        id: `pdf-export-${Date.now()}`,
+        sender: "system",
+        textEn: `Successfully generated and exported detailed engineering PDF report for "${activeProject.name}".`,
+        textHi: `"${activeProject.name}" के लिए विस्तृत इंजीनियरिंग पीडीएफ रिपोर्ट सफलतापूर्वक बनाई और निर्यात की गई।`,
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      setChatMessages((prev) => [...prev, pdfMsg]);
+    } catch (err: any) {
+      console.error("PDF Export error:", err);
+      alert(`Failed to export PDF: ${err?.message}`);
+    }
+  };
+
+  // Synchronize sketch canvas dimension on mode toggle or window resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (sketchMode && sketchCanvasRef.current) {
+        const canvas = sketchCanvasRef.current;
+        const parent = canvas.parentElement;
+        if (parent) {
+          // Backup drawing content before resize
+          const ctx = canvas.getContext("2d");
+          let backup: ImageData | null = null;
+          try {
+            if (ctx && canvas.width > 0 && canvas.height > 0) {
+              backup = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            }
+          } catch (e) {}
+
+          canvas.width = parent.clientWidth;
+          canvas.height = parent.clientHeight;
+
+          // Restore drawing content if backup exists
+          if (backup && ctx) {
+            try {
+              ctx.putImageData(backup, 0, 0);
+            } catch (e) {}
+          }
+        }
+      }
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [sketchMode]);
+
+  // Sketch Overlay Event Handlers
+  const handleSketchPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = sketchCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    setIsDrawingSketch(true);
+    setSketchStartPos({ x, y });
+
+    // Store state history for shape drawing previews
+    try {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      setSketchHistory(imgData);
+    } catch (err) {}
+
+    ctx.beginPath();
+    ctx.strokeStyle = sketchColor;
+    ctx.lineWidth = sketchSize;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    if (sketchTool === "pencil") {
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+  };
+
+  const handleSketchPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isDrawingSketch) return;
+    const canvas = sketchCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (sketchTool === "pencil") {
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    } else {
+      if (sketchHistory) {
+        ctx.putImageData(sketchHistory, 0, 0);
+      }
+
+      ctx.beginPath();
+      ctx.strokeStyle = sketchColor;
+      ctx.lineWidth = sketchSize;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      if (sketchTool === "rect") {
+        ctx.strokeRect(sketchStartPos.x, sketchStartPos.y, x - sketchStartPos.x, y - sketchStartPos.y);
+      } else if (sketchTool === "circle") {
+        const r = Math.sqrt(Math.pow(x - sketchStartPos.x, 2) + Math.pow(y - sketchStartPos.y, 2));
+        ctx.arc(sketchStartPos.x, sketchStartPos.y, r, 0, 2 * Math.PI);
+        ctx.stroke();
+      } else if (sketchTool === "line") {
+        ctx.moveTo(sketchStartPos.x, sketchStartPos.y);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+      }
+    }
+  };
+
+  const handleSketchPointerUp = () => {
+    setIsDrawingSketch(false);
+    setSketchHistory(null);
+  };
+
+  const handleClearSketch = () => {
+    const canvas = sketchCanvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  };
+
+  // 2D Canvas Drag and Drop Pointer Event Handlers
+  const handlePointerDown = (e: React.PointerEvent, id: string, currentX: number, currentY: number) => {
+    if (sketchMode) return;
+
+    e.stopPropagation();
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch (err) {}
+
+    setSelectedElementId(id);
+    setDraggingElementId(id);
+
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect) {
+      const clickX = ((e.clientX - rect.left) / rect.width) * 100;
+      const clickY = ((e.clientY - rect.top) / rect.height) * 100;
+      setDragStartOffset({
+        x: clickX - currentX,
+        y: clickY - currentY
+      });
+    }
+  };
+
+  const handlePointerMove = (e: React.PointerEvent, id: string) => {
+    if (draggingElementId !== id) return;
+    e.stopPropagation();
+
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect) {
+      const currentClickX = ((e.clientX - rect.left) / rect.width) * 100;
+      const currentClickY = ((e.clientY - rect.top) / rect.height) * 100;
+
+      const newX = Math.round(Math.min(90, Math.max(0, currentClickX - dragStartOffset.x)));
+      const newY = Math.round(Math.min(90, Math.max(0, currentClickY - dragStartOffset.y)));
+
+      const isRoom = activeProject.rooms.some(r => r.id === id);
+      if (isRoom) {
+        const updatedRooms = activeProject.rooms.map(r => {
+          if (r.id === id) {
+            return { ...r, x: newX, y: newY };
+          }
+          return r;
+        });
+
+        const outOfBounds = updatedRooms.some(r => r.x < 10 || r.y < 10 || r.x + r.width > 90 || r.y + r.height > 90);
+        const complianceNotes = outOfBounds 
+          ? ["Warning: Setback spacing violates local municipal guidelines! Keep distance > 6.0m from plot boundary lines."]
+          : ["FAR of 1.45 compliant within regional maximum cap of 1.75."];
+
+        const updated = projects.map(p => {
+          if (p.id === activeProject.id) {
+            return {
+              ...p,
+              rooms: updatedRooms,
+              complianceScore: outOfBounds ? 82 : 98,
+              complianceNotes
+            };
+          }
+          return p;
+        });
+        setProjects(updated);
+      } else {
+        const updatedElements = activeProject.elements.map(el => {
+          if (el.id === id) {
+            return { ...el, x: newX, y: newY };
+          }
+          return el;
+        });
+        const updated = projects.map(p => {
+          if (p.id === activeProject.id) {
+            return { ...p, elements: updatedElements };
+          }
+          return p;
+        });
+        setProjects(updated);
+      }
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent, id: string) => {
+    if (draggingElementId === id) {
+      e.stopPropagation();
+      const target = e.currentTarget as HTMLElement;
+      try {
+        target.releasePointerCapture(e.pointerId);
+      } catch (err) {}
+
+      setDraggingElementId(null);
+      pushStateToHistory(projects);
     }
   };
 
@@ -1431,6 +1778,29 @@ export default function App() {
 
             {/* Quick Actions / Close */}
             <div className="flex items-center gap-3">
+              {/* Save to Cloud */}
+              <button 
+                onClick={handleSaveToCloud}
+                disabled={isSavingToCloud}
+                className="text-xs font-mono text-slate-400 hover:text-white disabled:opacity-50 transition-colors flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg"
+              >
+                {isSavingToCloud ? (
+                  <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <Cloud className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
+                )}
+                Save to Cloud
+              </button>
+
+              {/* Export PDF */}
+              <button 
+                onClick={handleExportPDF}
+                className="text-xs font-mono text-slate-400 hover:text-white transition-colors flex items-center gap-1.5 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg"
+              >
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                Export PDF
+              </button>
+
               <button 
                 onClick={() => setIsLandingPage(true)}
                 className="text-xs font-mono text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg"
@@ -1507,7 +1877,8 @@ export default function App() {
                       { key: "boq", icon: FileText, label: "BOQ & Estimations" },
                       { key: "timeline", icon: Calendar, label: "Milestones Schedule" },
                       { key: "compliance", icon: ShieldCheck, label: "Bye-laws Compliance" },
-                      { key: "drone", icon: Camera, label: "Drone AI Inspection" }
+                      { key: "drone", icon: Camera, label: "Drone AI Inspection" },
+                      { key: "architect_review", icon: Star, label: "AI Architect Review ⭐" }
                     ].map((tab) => {
                       const Icon = tab.icon;
                       return (
@@ -1557,11 +1928,15 @@ export default function App() {
               {/* Bottom profile info */}
               <div className="border-t border-slate-900 pt-4 flex items-center gap-3">
                 <div className="w-9 h-9 rounded-full bg-slate-800 flex items-center justify-center text-white font-bold text-xs shadow">
-                  PK
+                  {user ? (user.displayName ? user.displayName.slice(0, 2).toUpperCase() : user.email ? user.email.slice(0, 2).toUpperCase() : "CE") : "GU"}
                 </div>
-                <div>
-                  <div className="text-xs font-bold text-white">Priyanshu Kumar</div>
-                  <div className="text-[9px] font-mono text-slate-500">priyanshukumar76347@gmail.com</div>
+                <div className="truncate">
+                  <div className="text-xs font-bold text-white truncate">
+                    {user ? (user.displayName || "Civil Engineer") : "Guest User"}
+                  </div>
+                  <div className="text-[9px] font-mono text-slate-500 truncate">
+                    {user ? (user.email || "engineer@civilgpt.com") : "guest@civilgpt.com"}
+                  </div>
                 </div>
               </div>
 
@@ -1657,7 +2032,10 @@ export default function App() {
                         </div>
 
                         {/* Interactive Element Canvas Container */}
-                        <div className="flex-1 relative w-full border border-slate-800 bg-[#111114] polish-dot-grid rounded-xl overflow-hidden min-h-[300px]">
+                        <div 
+                          ref={canvasRef}
+                          className="flex-1 relative w-full border border-slate-800 bg-[#111114] polish-dot-grid rounded-xl overflow-hidden min-h-[300px]"
+                        >
                           
                           {/* Outline boundary of plot setback safety lines */}
                           <div className="absolute inset-6 border-2 border-dashed border-red-500/30 pointer-events-none flex items-start justify-start p-2">
@@ -1669,6 +2047,9 @@ export default function App() {
                             <div
                               key={room.id}
                               onClick={() => handleElementClick(room.id)}
+                              onPointerDown={(e) => handlePointerDown(e, room.id, room.x, room.y)}
+                              onPointerMove={(e) => handlePointerMove(e, room.id)}
+                              onPointerUp={(e) => handlePointerUp(e, room.id)}
                               style={{
                                 left: `${room.x}%`,
                                 top: `${room.y}%`,
@@ -1676,7 +2057,9 @@ export default function App() {
                                 height: `${room.height}%`,
                                 border: selectedElementId === room.id ? "2px solid #2563EB" : "1px solid rgba(255,255,255,0.2)"
                               }}
-                              className="absolute rounded-lg cursor-pointer transition-all flex flex-col justify-between p-2 select-none group"
+                              className={`absolute rounded-lg cursor-pointer transition-all flex flex-col justify-between p-2 select-none group touch-none cursor-grab active:cursor-grabbing ${
+                                selectedElementId === room.id ? "ring-2 ring-blue-500/30 shadow-lg bg-blue-500/5" : ""
+                              }`}
                             >
                               {/* Background layer representing room styled with chosen style */}
                               <div className="absolute inset-0 opacity-40 rounded-lg pointer-events-none bg-blue-500/10" />
@@ -1689,10 +2072,10 @@ export default function App() {
 
                               {/* Interactive Position shift controls for mobile/mouse drag simulation */}
                               <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1 relative z-20 self-end">
-                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "y", -2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px]">↑</button>
-                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "y", 2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px]">↓</button>
-                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "x", -2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px]">←</button>
-                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "x", 2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px]">→</button>
+                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "y", -2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px] hover:bg-slate-700">↑</button>
+                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "y", 2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px] hover:bg-slate-700">↓</button>
+                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "x", -2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px] hover:bg-slate-700">←</button>
+                                <button onClick={(e) => { e.stopPropagation(); handleMoveItem(room.id, "x", 2); }} className="w-4 h-4 bg-slate-800 rounded flex items-center justify-center text-white text-[9px] hover:bg-slate-700">→</button>
                               </div>
 
                               <div className="text-[8px] font-mono text-slate-400 relative z-10">
@@ -1711,6 +2094,9 @@ export default function App() {
                                   e.stopPropagation();
                                   handleElementClick(el.id);
                                 }}
+                                onPointerDown={(e) => handlePointerDown(e, el.id, el.x, el.y)}
+                                onPointerMove={(e) => handlePointerMove(e, el.id)}
+                                onPointerUp={(e) => handlePointerUp(e, el.id)}
                                 style={{
                                   left: `${el.x}%`,
                                   top: `${el.y}%`,
@@ -1718,7 +2104,7 @@ export default function App() {
                                   height: `${el.height}%`,
                                   border: selectedElementId === el.id ? "2px solid #F97316" : "none"
                                 }}
-                                className={`absolute cursor-pointer transition-transform hover:scale-110 flex items-center justify-center select-none group z-10`}
+                                className={`absolute cursor-pointer transition-transform hover:scale-110 flex items-center justify-center select-none group z-10 touch-none cursor-grab active:cursor-grabbing`}
                               >
                                 {isColumn ? (
                                   <div className="w-full h-full bg-slate-900 border border-orange-500 rounded flex flex-col justify-center items-center text-orange-400">
@@ -1743,6 +2129,80 @@ export default function App() {
                             );
                           })}
 
+                          {/* SKETCHING OVERLAY LAYER */}
+                          {sketchMode && (
+                            <canvas
+                              ref={sketchCanvasRef}
+                              className="absolute inset-0 z-20 cursor-crosshair bg-transparent touch-none"
+                              onPointerDown={handleSketchPointerDown}
+                              onPointerMove={handleSketchPointerMove}
+                              onPointerUp={handleSketchPointerUp}
+                            />
+                          )}
+
+                          {/* SKETCH FLOATING TOOLBAR */}
+                          {sketchMode && (
+                            <div className="absolute top-4 right-4 z-30 bg-slate-900/95 border border-slate-800 p-2 rounded-xl flex items-center gap-3 shadow-xl backdrop-blur">
+                              
+                              {/* Tool Type */}
+                              <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-800">
+                                {([
+                                  { key: "pencil", label: "Pencil" },
+                                  { key: "rect", label: "Rect" },
+                                  { key: "circle", label: "Circle" },
+                                  { key: "line", label: "Line" }
+                                ] as const).map((t) => (
+                                  <button
+                                    key={t.key}
+                                    onClick={() => setSketchTool(t.key)}
+                                    className={`px-2 py-0.5 rounded text-[8px] uppercase font-mono font-bold transition-all ${
+                                      sketchTool === t.key 
+                                        ? "bg-blue-600 text-white shadow-sm" 
+                                        : "text-slate-400 hover:text-white"
+                                    }`}
+                                  >
+                                    {t.label}
+                                  </button>
+                                ))}
+                              </div>
+
+                              {/* Colors Picker */}
+                              <div className="flex items-center gap-1 bg-slate-950 px-1.5 py-1 rounded-lg border border-slate-800">
+                                {["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#ffffff"].map((color) => (
+                                  <button
+                                    key={color}
+                                    onClick={() => setSketchColor(color)}
+                                    style={{ backgroundColor: color }}
+                                    className={`w-3 h-3 rounded-full border border-slate-950 transition-transform ${
+                                      sketchColor === color ? "scale-125 ring-1 ring-white/50" : "hover:scale-110"
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+
+                              {/* Brush Size */}
+                              <select
+                                value={sketchSize}
+                                onChange={(e) => setSketchSize(Number(e.target.value))}
+                                className="bg-slate-950 border border-slate-800 text-slate-300 text-[9px] font-mono rounded px-1.5 py-0.5 focus:outline-none"
+                              >
+                                <option value={1}>1px</option>
+                                <option value={3}>3px</option>
+                                <option value={6}>6px</option>
+                                <option value={10}>10px</option>
+                              </select>
+
+                              {/* Action Clean */}
+                              <button
+                                onClick={handleClearSketch}
+                                className="px-2 py-0.5 bg-red-500/10 hover:bg-red-500/25 border border-red-500/20 text-red-400 rounded text-[8px] uppercase font-mono font-bold transition-all"
+                              >
+                                Clear
+                              </button>
+
+                            </div>
+                          )}
+
                         </div>
 
                         {/* Fast design element addition tools */}
@@ -1761,6 +2221,29 @@ export default function App() {
                             <Plus className="w-4 h-4 text-orange-500" />
                             {t[lang].addColumn}
                           </button>
+                          
+                          {/* Sketch Tool Toggle button */}
+                          <button
+                            onClick={() => setSketchMode(!sketchMode)}
+                            className={`text-xs font-semibold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 border ${
+                              sketchMode 
+                                ? "bg-purple-600/90 border-purple-500 text-white shadow-md shadow-purple-600/20" 
+                                : "bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-800"
+                            }`}
+                          >
+                            <Sparkles className="w-4 h-4 text-purple-400" />
+                            {sketchMode ? "Exit Sketch Mode" : "Sketch Tool"}
+                          </button>
+
+                          {/* AI Architect Review (Premium) Action button */}
+                          <button
+                            onClick={() => setWorkspaceTab("architect_review" as any)}
+                            className="bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 shadow-lg shadow-orange-500/20 cursor-pointer animate-pulse"
+                          >
+                            <Star className="w-4 h-4 text-yellow-100 fill-yellow-100" />
+                            ⭐ AI Architect Review (Premium)
+                          </button>
+
                           {selectedElementId && (
                             <button
                               onClick={handleDeleteSelected}
@@ -1943,19 +2426,30 @@ export default function App() {
                           <p className="text-xs text-slate-400 font-light mt-1">Live compiled quantities and costs. Double checks with structural loads on-the-fly.</p>
                         </div>
                         
-                        {/* Regional Rate Override Multiplier */}
-                        <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
-                          <span className="text-[10px] font-mono text-slate-400 uppercase">Rate Multiplier</span>
-                          <input 
-                            type="number" 
-                            step="0.1" 
-                            min="0.5" 
-                            max="2.0" 
-                            value={regionalMultiplier} 
-                            onChange={(e) => setRegionalMultiplier(Math.max(0.5, Number(e.target.value)))} 
-                            className="w-12 bg-transparent text-xs text-white font-mono focus:outline-none"
-                          />
-                          <span className="text-[10px] font-mono text-slate-500">x</span>
+                        <div className="flex flex-wrap items-center gap-3">
+                          {/* Export PDF */}
+                          <button
+                            onClick={handleExportPDF}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-1.5 rounded-lg transition-all flex items-center gap-1.5 shadow"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            Export PDF Report
+                          </button>
+
+                          {/* Regional Rate Override Multiplier */}
+                          <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800">
+                            <span className="text-[10px] font-mono text-slate-400 uppercase">Rate Multiplier</span>
+                            <input 
+                              type="number" 
+                              step="0.1" 
+                              min="0.5" 
+                              max="2.0" 
+                              value={regionalMultiplier} 
+                              onChange={(e) => setRegionalMultiplier(Math.max(0.5, Number(e.target.value)))} 
+                              className="w-12 bg-transparent text-xs text-white font-mono focus:outline-none"
+                            />
+                            <span className="text-[10px] font-mono text-slate-500">x</span>
+                          </div>
                         </div>
                       </div>
 
@@ -2212,6 +2706,14 @@ export default function App() {
 
                     </div>
                   </div>
+                )}
+
+                {workspaceTab === ("architect_review" as any) && (
+                  <AIArchitectReview 
+                    lang={lang} 
+                    regionalMultiplier={regionalMultiplier} 
+                    formatCurrency={formatCurrency} 
+                  />
                 )}
 
               </div>

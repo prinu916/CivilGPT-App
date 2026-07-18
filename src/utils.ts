@@ -185,7 +185,7 @@ export const getSmartDuplexTemplate = (): Project => {
     name: "Metropolitan Smart Duplex",
     description: "Compact high-performance 3-Bedroom duplex prioritizing natural ventilation, earthquake damping column sizing, and integrated rainwater recycling cisterns.",
     type: ProjectType.DUPLEX,
-    owner: "Priyanshu Builders",
+    owner: "Apex Builders",
     status: "Planning",
     budget: 142000,
     location: "Noida Sector 62",
