@@ -1,0 +1,6 @@
+{
+  "name": "CivilGPT",
+  "description": "The elite AI-powered Construction Operating System for next-gen architects, engineers, and builders. Design smarter and build faster with interactive 2D floor plans, immersive 3D viewer, multi-agent AI engineering calculations, smart BOQ calculators, and collaboration tools.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
