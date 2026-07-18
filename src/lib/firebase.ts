@@ -9,13 +9,12 @@ import { getFirestore } from "firebase/firestore";
 
 // Firebase Applet Config parsed directly
 const firebaseConfig = {
-  projectId: "gen-lang-client-0384965083",
-  appId: "1:23962460050:web:379cf8db61dd9c3d18eb4b",
-  apiKey: "AIzaSyDBEvNVbrcBmrW_r5P_MF086DwQjpxTzyQ",
-  authDomain: "gen-lang-client-0384965083.firebaseapp.com",
-  firestoreDatabaseId: "ai-studio-civilgpt-00f6e802-c3ac-4807-9c7b-9f877bb828c2",
-  storageBucket: "gen-lang-client-0384965083.firebasestorage.app",
-  messagingSenderId: "23962460050"
+  projectId: "studio-5498054063-fbc6b",
+  appId: "1:702988054202:web:cccd6b64afb1b0a4405c83",
+  apiKey: "AIzaSyCgKXXFpuErAkRMGgzC2sOwIgKqDm1Mciw",
+  authDomain: "studio-5498054063-fbc6b.firebaseapp.com",
+  storageBucket: "studio-5498054063-fbc6b.firebasestorage.app",
+  messagingSenderId: "702988054202"
 };
 
 const app = initializeApp(firebaseConfig);

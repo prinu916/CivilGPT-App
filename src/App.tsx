@@ -596,7 +596,7 @@ export default function App() {
         setAuthError("This email is already in use. Please sign in instead.");
       } else if (err.code === "auth/operation-not-allowed") {
         setAuthError(
-          "Email/Password Sign-In is not enabled on this Firebase Project. Please enable it in your Firebase Console (Authentication > Sign-in method > Email/Password > Enable > Save)."
+          "Email/Password Sign-In is either not enabled or the settings are still propagating. If you already enabled it in the Firebase Console (Authentication > Sign-in method > Email/Password > Enable > Save), please wait 1 minute, refresh this page, and try signing in again."
         );
       } else if (err.code === "auth/network-request-failed") {
         setAuthError(
