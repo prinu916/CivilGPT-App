@@ -104,6 +104,7 @@ import {
 import { exportProjectPDF } from "./lib/exportPdf";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import AIArchitectReview from "./components/AIArchitectReview";
+import CADStudio from "./components/CADStudio";
 
 export default function App() {
   // Global Settings State
@@ -156,7 +157,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState<"2d" | "3d">("2d");
   const [drawingStyle, setDrawingStyle] = useState<DrawingStyle>(DrawingStyle.CAD);
   const [explainLevel, setExplainLevel] = useState<"Simple Mode" | "Pro Mode" | "Teaching Mode">("Pro Mode");
-  const [workspaceTab, setWorkspaceTab] = useState<"editor" | "boq" | "timeline" | "compliance" | "drone">("editor");
+  const [workspaceTab, setWorkspaceTab] = useState<"editor" | "boq" | "timeline" | "compliance" | "drone" | "architect_review" | "cad_studio">("editor");
 
   // Landing Page Interactive States
   const [billingPeriod, setBillingPeriod] = useState<"monthly" | "yearly">("monthly");
@@ -1878,7 +1879,8 @@ export default function App() {
                       { key: "timeline", icon: Calendar, label: "Milestones Schedule" },
                       { key: "compliance", icon: ShieldCheck, label: "Bye-laws Compliance" },
                       { key: "drone", icon: Camera, label: "Drone AI Inspection" },
-                      { key: "architect_review", icon: Star, label: "AI Architect Review ⭐" }
+                      { key: "architect_review", icon: Star, label: "AI Architect Review ⭐" },
+                      { key: "cad_studio", icon: Compass, label: "📐 CAD Studio" }
                     ].map((tab) => {
                       const Icon = tab.icon;
                       return (
@@ -2713,6 +2715,13 @@ export default function App() {
                     lang={lang} 
                     regionalMultiplier={regionalMultiplier} 
                     formatCurrency={formatCurrency} 
+                  />
+                )}
+
+                {workspaceTab === "cad_studio" && (
+                  <CADStudio 
+                    lang={lang}
+                    formatCurrency={formatCurrency}
                   />
                 )}
 
