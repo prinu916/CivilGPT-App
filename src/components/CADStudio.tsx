@@ -39,7 +39,12 @@ import {
   Move,
   CornerDownRight,
   UserCheck,
-  ChevronDown
+  ChevronDown,
+  Folder,
+  ChevronRight,
+  ArrowUp,
+  ArrowDown,
+  GripVertical
 } from "lucide-react";
 
 // Types for our CAD Editor
@@ -72,6 +77,15 @@ interface CADLayer {
   opacity: number;
   lineType: "solid" | "dashed" | "dotted";
   lineWeight: number; // in mm
+}
+
+interface LayerGroup {
+  id: string;
+  name: string;
+  layerNames: string[];
+  expanded: boolean;
+  visible: boolean;
+  locked: boolean;
 }
 
 export default function CADStudio({ 
@@ -118,6 +132,12 @@ export default function CADStudio({
     { name: "Dimensions", color: "#ef4444", visible: true, locked: false, frozen: false, opacity: 1, lineType: "dotted", lineWeight: 0.15 },
     { name: "Text & Annotations", color: "#e2e8f0", visible: true, locked: false, frozen: false, opacity: 0.9, lineType: "solid", lineWeight: 0.25 }
   ]);
+
+  const [layerGroups, setLayerGroups] = useState<LayerGroup[]>([
+    { id: "group-struct", name: "Structural Layout", layerNames: ["Walls", "Doors", "Windows"], expanded: true, visible: true, locked: false },
+    { id: "group-annot", name: "Annotation & Measures", layerNames: ["Dimensions", "Text & Annotations"], expanded: true, visible: true, locked: false }
+  ]);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
 
   // Modals / Dialog UI status
   const [importModalOpen, setImportModalOpen] = useState<boolean>(false);
@@ -217,6 +237,11 @@ export default function CADStudio({
   // Interactive draw on click handling
   const handleCanvasMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
     if (activeDrawTool === "select") return;
+
+    if (isLayerLocked(activeLayer)) {
+      showNotification(`Active layer "${activeLayer}" is locked. Unlock it in the Layer Manager to draw.`);
+      return;
+    }
     
     const rect = e.currentTarget.getBoundingClientRect();
     let x = Math.round(e.clientX - rect.left);
@@ -351,6 +376,11 @@ export default function CADStudio({
   // Selected element property editor functions
   const handleUpdateSelectedProperty = (key: keyof CADElement, val: any) => {
     if (!selectedElementId) return;
+    const selected = elements.find((el) => el.id === selectedElementId);
+    if (selected && isLayerLocked(selected.layer)) {
+      showNotification(`Layer "${selected.layer}" is locked. Cannot modify.`);
+      return;
+    }
     const updated = elements.map((el) => {
       if (el.id === selectedElementId) {
         return { ...el, [key]: val };
@@ -362,6 +392,11 @@ export default function CADStudio({
 
   const handleDeleteSelectedElement = () => {
     if (!selectedElementId) return;
+    const selected = elements.find((el) => el.id === selectedElementId);
+    if (selected && isLayerLocked(selected.layer)) {
+      showNotification(`Layer "${selected.layer}" is locked. Cannot delete.`);
+      return;
+    }
     const filtered = elements.filter((el) => el.id !== selectedElementId);
     pushState(filtered);
     setSelectedElementId(null);
@@ -374,11 +409,15 @@ export default function CADStudio({
       showNotification("Please select a CAD element to modify first.");
       return;
     }
-    setActiveModifyTool(tool);
-    
     const selected = elements.find((el) => el.id === selectedElementId);
     if (!selected) return;
 
+    if (isLayerLocked(selected.layer)) {
+      showNotification(`Layer "${selected.layer}" is locked. Cannot modify elements on locked layers.`);
+      return;
+    }
+    setActiveModifyTool(tool);
+    
     let updated = [...elements];
     switch (tool) {
       case "copy":
@@ -488,6 +527,88 @@ export default function CADStudio({
 
   const toggleLayerFreeze = (name: string) => {
     setLayers(layers.map((l) => l.name === name ? { ...l, frozen: !l.frozen } : l));
+  };
+
+  const isLayerLocked = (layerName: string) => {
+    return layers.find((l) => l.name === layerName)?.locked || false;
+  };
+
+  const moveLayer = (index: number, direction: "up" | "down") => {
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= layers.length) return;
+    const reordered = [...layers];
+    const temp = reordered[index];
+    reordered[index] = reordered[targetIndex];
+    reordered[targetIndex] = temp;
+    setLayers(reordered);
+    showNotification(`Shuffled layer rendering depth: "${temp.name}" moved ${direction}.`);
+  };
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggingIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggingIndex === null || draggingIndex === index) return;
+    const reordered = [...layers];
+    const [removed] = reordered.splice(draggingIndex, 1);
+    reordered.splice(index, 0, removed);
+    setLayers(reordered);
+    setDraggingIndex(null);
+    showNotification(`Reordered layer drawing stack: "${removed.name}" moved.`);
+  };
+
+  const toggleGroupVisibility = (groupId: string) => {
+    setLayerGroups(layerGroups.map((g) => {
+      if (g.id === groupId) {
+        const nextVisible = !g.visible;
+        setLayers(layers.map((l) => g.layerNames.includes(l.name) ? { ...l, visible: nextVisible } : l));
+        return { ...g, visible: nextVisible };
+      }
+      return g;
+    }));
+  };
+
+  const toggleGroupLock = (groupId: string) => {
+    setLayerGroups(layerGroups.map((g) => {
+      if (g.id === groupId) {
+        const nextLocked = !g.locked;
+        setLayers(layers.map((l) => g.layerNames.includes(l.name) ? { ...l, locked: nextLocked } : l));
+        return { ...g, locked: nextLocked };
+      }
+      return g;
+    }));
+  };
+
+  const toggleGroupExpanded = (groupId: string) => {
+    setLayerGroups(layerGroups.map((g) => g.id === groupId ? { ...g, expanded: !g.expanded } : g));
+  };
+
+  const handleCreateGroup = () => {
+    const groupName = prompt("Enter new Layer Folder/Group Name:");
+    if (!groupName) return;
+    if (layerGroups.some((g) => g.name.toLowerCase() === groupName.toLowerCase())) {
+      showNotification("Folder group already exists.");
+      return;
+    }
+    setLayerGroups([
+      ...layerGroups,
+      {
+        id: `group-${Date.now()}`,
+        name: groupName,
+        layerNames: [],
+        expanded: true,
+        visible: true,
+        locked: false
+      }
+    ]);
+    showNotification(`Created Layer Folder: "${groupName}"`);
   };
 
   // AI assistant simulation engine
@@ -606,6 +727,136 @@ export default function CADStudio({
   const triggerFileExport = (format: string) => {
     setExportModalOpen(false);
     showNotification(`Generating download bundle. Raw vector payload compiled as civil_design.${format.toLowerCase()}.`);
+  };
+
+  const renderLayerItem = (layer: CADLayer, index: number) => {
+    const isSelected = activeLayer === layer.name;
+    return (
+      <div 
+        key={layer.name}
+        draggable="true"
+        onDragStart={(e) => handleDragStart(e, index)}
+        onDragOver={(e) => handleDragOver(e, index)}
+        onDrop={(e) => handleDrop(e, index)}
+        className={`p-2 rounded-xl border transition-all space-y-1.5 ${
+          isSelected 
+            ? "bg-slate-950 border-slate-800 text-white shadow-inner" 
+            : "bg-slate-900/60 border-transparent text-slate-400 hover:bg-slate-900/80 hover:text-slate-200"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-1">
+          {/* Grip and Selection */}
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <span className="cursor-grab text-slate-600 hover:text-slate-400 shrink-0" title="Drag to reorder depth">
+              <GripVertical className="w-3.5 h-3.5" />
+            </span>
+            <button 
+              onClick={() => setActiveLayer(layer.name)}
+              className="flex items-center gap-1.5 font-mono truncate text-left w-full"
+              title="Set Active Layer"
+            >
+              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: layer.color }} />
+              <span className="truncate text-xs font-semibold">{layer.name}</span>
+            </button>
+          </div>
+
+          {/* Shuffling arrows for quick accessibility */}
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button 
+              onClick={() => moveLayer(index, "up")} 
+              disabled={index === 0}
+              className="p-0.5 rounded text-slate-600 hover:text-slate-300 disabled:opacity-30 disabled:pointer-events-none"
+              title="Move Layer Up (Draws Later)"
+            >
+              <ArrowUp className="w-3 h-3" />
+            </button>
+            <button 
+              onClick={() => moveLayer(index, "down")} 
+              disabled={index === layers.length - 1}
+              className="p-0.5 rounded text-slate-600 hover:text-slate-300 disabled:opacity-30 disabled:pointer-events-none"
+              title="Move Layer Down (Draws Earlier)"
+            >
+              <ArrowDown className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* Folder assignment drop down */}
+          <div className="shrink-0">
+            <select
+              value={layerGroups.find(g => g.layerNames.includes(layer.name))?.id || "none"}
+              onChange={(e) => {
+                const targetGroupId = e.target.value;
+                setLayerGroups(layerGroups.map(g => {
+                  // Remove from all groups
+                  let names = g.layerNames.filter(n => n !== layer.name);
+                  // Add to target group if matches
+                  if (g.id === targetGroupId) {
+                    names = [...names, layer.name];
+                  }
+                  return { ...g, layerNames: names };
+                }));
+                showNotification(`Moved layer "${layer.name}"`);
+              }}
+              title="Assign Folder"
+              className="bg-slate-900 border border-slate-850 text-[9px] text-slate-400 rounded px-1 py-0.5 outline-none font-mono focus:border-blue-500 max-w-[80px]"
+            >
+              <option value="none">No Folder</option>
+              {layerGroups.map(g => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Visibility and Lock toggles */}
+          <div className="flex items-center gap-0.5 shrink-0">
+            <button 
+              onClick={() => {
+                toggleLayerVisibility(layer.name);
+                showNotification(`${layer.visible ? "Hid" : "Revealed"} layer "${layer.name}"`);
+              }} 
+              title={layer.visible ? "Hide Layer" : "Show Layer"}
+              className={`p-1 rounded hover:bg-slate-800 transition-colors ${
+                layer.visible ? "text-blue-400" : "text-slate-600 hover:text-slate-400"
+              }`}
+            >
+              {layer.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+            </button>
+            <button 
+              onClick={() => {
+                toggleLayerLock(layer.name);
+                showNotification(`Layer "${layer.name}" ${layer.locked ? "unlocked" : "locked"}`);
+              }} 
+              title={layer.locked ? "Unlock Layer" : "Lock Layer"}
+              className={`p-1 rounded hover:bg-slate-800 transition-colors ${
+                layer.locked ? "text-amber-500" : "text-slate-600 hover:text-slate-400"
+              }`}
+            >
+              {layer.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Opacity Slider */}
+        <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-950/30 rounded-lg">
+          <span className="text-[9px] font-mono text-slate-500 shrink-0">Opacity:</span>
+          <input 
+            type="range" 
+            min="0" 
+            max="1" 
+            step="0.05"
+            value={layer.opacity}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setLayers(layers.map(l => l.name === layer.name ? { ...l, opacity: val } : l));
+            }}
+            className="flex-1 h-1 bg-slate-850 rounded-lg appearance-none cursor-pointer accent-blue-500"
+          />
+          <span className="text-[9px] font-mono text-slate-400 w-6 text-right">
+            {Math.round(layer.opacity * 100)}%
+          </span>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -906,65 +1157,118 @@ export default function CADStudio({
           </div>
 
           {/* LAYER MANAGER */}
-          <div className="bg-slate-900/40 border border-slate-800 p-4 rounded-2xl text-left space-y-3 flex-1 min-h-[220px] flex flex-col justify-between">
-            <div className="space-y-3">
+          <div className="bg-slate-900/40 border border-slate-800 p-4 rounded-2xl text-left space-y-3 flex-1 min-h-[340px] flex flex-col justify-between">
+            <div className="space-y-3 flex-1 flex flex-col min-h-0">
+              {/* Header */}
               <div className="flex justify-between items-center">
                 <span className="text-[11px] font-mono tracking-wider text-slate-500 uppercase font-bold">Layer Manager</span>
-                <button 
-                  onClick={handleCreateLayer}
-                  className="p-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg"
-                  title="Create New Layer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button 
+                    onClick={handleCreateGroup}
+                    className="p-1 bg-slate-850 hover:bg-slate-800 text-slate-300 rounded-lg flex items-center gap-1 text-[10px] px-1.5 py-1 font-mono border border-slate-800 transition-colors"
+                    title="Create Layer Folder/Group"
+                  >
+                    <FolderPlus className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>+ Folder</span>
+                  </button>
+                  <button 
+                    onClick={handleCreateLayer}
+                    className="p-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg flex items-center gap-1 text-[10px] px-1.5 py-1 font-mono border border-blue-700 transition-colors"
+                    title="Create New Layer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Layer</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="space-y-1.5 max-h-[180px] overflow-y-auto">
-                {layers.map((layer) => (
-                  <div 
-                    key={layer.name} 
-                    className={`flex items-center justify-between p-1.5 rounded-lg text-[11px] border transition-colors ${
-                      activeLayer === layer.name 
-                        ? "bg-slate-950 border-slate-800 text-white" 
-                        : "border-transparent text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    <button 
-                      onClick={() => setActiveLayer(layer.name)}
-                      className="flex items-center gap-2 font-mono truncate flex-1 text-left"
-                    >
-                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: layer.color }} />
-                      <span className="truncate">{layer.name}</span>
-                    </button>
-                    
-                    <div className="flex items-center gap-1">
-                      <button 
-                        onClick={() => {
-                          toggleLayerVisibility(layer.name);
-                          showNotification(`${layer.visible ? "Hid" : "Revealed"} layer "${layer.name}"`);
-                        }} 
-                        title={layer.visible ? "Hide Layer" : "Show Layer"}
-                        className={`p-1 rounded hover:bg-slate-800 transition-colors ${
-                          layer.visible ? "text-blue-400" : "text-slate-600 hover:text-slate-400"
-                        }`}
-                      >
-                        {layer.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                      </button>
-                      <button 
-                        onClick={() => {
-                          toggleLayerLock(layer.name);
-                          showNotification(`Layer "${layer.name}" ${layer.locked ? "unlocked" : "locked"}`);
-                        }} 
-                        title={layer.locked ? "Unlock Layer" : "Lock Layer"}
-                        className={`p-1 rounded hover:bg-slate-800 transition-colors ${
-                          layer.locked ? "text-amber-500" : "text-slate-600 hover:text-slate-400"
-                        }`}
-                      >
-                        {layer.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-                      </button>
+              {/* Scrollable List Container */}
+              <div className="space-y-3 overflow-y-auto flex-1 pr-1 max-h-[380px]">
+                {/* 1. Folders rendering */}
+                {layerGroups.map((group) => {
+                  const groupLayers = layers.filter((l) => group.layerNames.includes(l.name));
+                  return (
+                    <div key={group.id} className="border border-slate-800/40 rounded-xl overflow-hidden bg-slate-950/20">
+                      {/* Folder Header */}
+                      <div className="flex items-center justify-between p-2 bg-slate-950/60 border-b border-slate-900/60">
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          <button 
+                            onClick={() => toggleGroupExpanded(group.id)}
+                            className="p-0.5 text-slate-500 hover:text-white transition-colors"
+                          >
+                            {group.expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                          </button>
+                          <Folder className="w-4 h-4 text-indigo-400 shrink-0" />
+                          <span className="font-mono text-xs font-semibold text-slate-200 truncate">{group.name}</span>
+                          <span className="text-[9px] font-mono text-slate-500 shrink-0">({groupLayers.length})</span>
+                        </div>
+
+                        {/* Folder controls */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button 
+                            onClick={() => {
+                              toggleGroupVisibility(group.id);
+                              showNotification(`Toggled visibility for folder "${group.name}"`);
+                            }} 
+                            title={group.visible ? "Hide Folder layers" : "Show Folder layers"}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${
+                              group.visible ? "text-blue-400" : "text-slate-600 hover:text-slate-400"
+                            }`}
+                          >
+                            {group.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                          </button>
+                          <button 
+                            onClick={() => {
+                              toggleGroupLock(group.id);
+                              showNotification(`Toggled lock for folder "${group.name}"`);
+                            }} 
+                            title={group.locked ? "Unlock Folder layers" : "Lock Folder layers"}
+                            className={`p-1 rounded hover:bg-slate-800 transition-colors ${
+                              group.locked ? "text-amber-500" : "text-slate-600 hover:text-slate-400"
+                            }`}
+                          >
+                            {group.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Folder Layer List */}
+                      {group.expanded && (
+                        <div className="p-1.5 space-y-1.5 bg-slate-950/10">
+                          {groupLayers.length === 0 ? (
+                            <div className="text-center py-3 text-[10px] text-slate-500 font-mono">
+                              Folder is empty. Move layers here.
+                            </div>
+                          ) : (
+                            groupLayers.map((layer) => {
+                              const globalIndex = layers.findIndex(l => l.name === layer.name);
+                              return renderLayerItem(layer, globalIndex);
+                            })
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
+
+                {/* 2. Unassigned Layers Section */}
+                {(() => {
+                  const layersInGroups = layerGroups.reduce<string[]>((acc, g) => [...acc, ...g.layerNames], []);
+                  const unassignedLayers = layers.filter((l) => !layersInGroups.includes(l.name));
+                  return (
+                    <div className="space-y-1.5 border-t border-slate-900 pt-3">
+                      <div className="px-1 text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">
+                        General / Unassigned Layers
+                      </div>
+                      <div className="space-y-1.5">
+                        {unassignedLayers.map((layer) => {
+                          const globalIndex = layers.findIndex(l => l.name === layer.name);
+                          return renderLayerItem(layer, globalIndex);
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -1028,14 +1332,18 @@ export default function CADStudio({
                     />
                   )}
 
-                  {/* Render CAD active vector elements */}
-                  {elements.map((el) => {
+                  {/* Render CAD active vector elements ordered by layer stack order */}
+                  {[...elements].sort((a, b) => {
+                    const indexA = layers.findIndex((l) => l.name === a.layer);
+                    const indexB = layers.findIndex((l) => l.name === b.layer);
+                    return indexA - indexB;
+                  }).map((el) => {
                     const lSettings = layers.find((l) => l.name === el.layer);
                     if (lSettings && !lSettings.visible) return null;
 
                     const strokeColor = el.color;
                     const strokeWidth = el.thickness;
-                    const elementOpacity = el.opacity;
+                    const elementOpacity = el.opacity * (lSettings?.opacity !== undefined ? lSettings.opacity : 1);
                     
                     const isSelected = selectedElementId === el.id;
                     const selectionBorderColor = "#ef4444";
@@ -1045,6 +1353,10 @@ export default function CADStudio({
                         key={el.id} 
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (lSettings && lSettings.locked) {
+                            showNotification(`Layer "${el.layer}" is locked. Unlock it in the Layer Manager to select or modify.`);
+                            return;
+                          }
                           if (activeDrawTool === "select") {
                             setSelectedElementId(el.id);
                             showNotification(`Selected ${el.name} Vector for inspection.`);
@@ -1185,6 +1497,7 @@ export default function CADStudio({
                       const lSettings = layers.find((l) => l.name === el.layer);
                       if (lSettings && !lSettings.visible) return null;
                       if (el.layer !== "Walls" && el.type !== "rect" && el.type !== "staircase") return null;
+                      const opacity = lSettings?.opacity !== undefined ? lSettings.opacity : 1;
                       return (
                         <div 
                           key={el.id} 
@@ -1196,7 +1509,8 @@ export default function CADStudio({
                             top: `${40 + idx * 5}px`,
                             transform: "rotateY(-30deg) rotateX(15deg)",
                             borderLeft: "2px solid #3b82f6",
-                            borderTop: "2px solid #60a5fa"
+                            borderTop: "2px solid #60a5fa",
+                            opacity: opacity
                           }}
                         >
                           <span className="absolute bottom-1 right-2 text-[8px] font-mono text-blue-400">{el.name} (Z-3.2m)</span>
@@ -1209,13 +1523,20 @@ export default function CADStudio({
                       if (el.type !== "staircase") return false;
                       const lSettings = layers.find((l) => l.name === el.layer);
                       return !lSettings || lSettings.visible;
-                    }) && (
-                      <div className="absolute bg-pink-600/20 border border-pink-500/30 w-24 h-24 transform rotateY(-30deg) rotateX(15deg) left-28 top-20 flex flex-col justify-between">
-                        <div className="w-full h-1/4 bg-pink-500/35 border-b border-pink-400" />
-                        <div className="w-full h-1/4 bg-pink-500/25 border-b border-pink-400" />
-                        <div className="w-full h-1/4 bg-pink-500/15 border-b border-pink-400" />
-                      </div>
-                    )}
+                    }) && (() => {
+                      const lSettings = layers.find((l) => l.name === "Walls");
+                      const opacity = lSettings?.opacity !== undefined ? lSettings.opacity : 1;
+                      return (
+                        <div 
+                          style={{ opacity }}
+                          className="absolute bg-pink-600/20 border border-pink-500/30 w-24 h-24 transform rotateY(-30deg) rotateX(15deg) left-28 top-20 flex flex-col justify-between"
+                        >
+                          <div className="w-full h-1/4 bg-pink-500/35 border-b border-pink-400" />
+                          <div className="w-full h-1/4 bg-pink-500/25 border-b border-pink-400" />
+                          <div className="w-full h-1/4 bg-pink-500/15 border-b border-pink-400" />
+                        </div>
+                      );
+                    })()}
 
                     {/* Ground grid ticks */}
                     <div className="absolute w-64 h-64 border border-dashed border-slate-800/50 pointer-events-none rounded" />
